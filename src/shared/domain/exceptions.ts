@@ -26,7 +26,11 @@ export class InvalidStatusTransitionException extends DomainException {
 }
 
 export class InsufficientStockException extends DomainException {
-  constructor(pecaNome: string, disponivel: number, solicitado: number) {
+  constructor(
+    public readonly pecaNome: string,
+    public readonly disponivel: number,
+    public readonly solicitado: number,
+  ) {
     super(
       `Estoque insuficiente para a peça "${pecaNome}": disponível ${disponivel}, solicitado ${solicitado}`,
     );
