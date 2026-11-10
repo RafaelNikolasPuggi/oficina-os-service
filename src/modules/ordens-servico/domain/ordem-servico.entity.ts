@@ -1,5 +1,8 @@
 import { Entity } from '../../../shared/domain/entity.base';
-import { InvalidStatusTransitionException } from '../../../shared/domain/exceptions';
+import {
+  DomainException,
+  InvalidStatusTransitionException,
+} from '../../../shared/domain/exceptions';
 import {
   criarItemPeca,
   criarItemServico,
@@ -36,6 +39,7 @@ export interface OrdemServicoSnapshot {
   dataInicioExecucao: Date | null;
   dataFinalizacao: Date | null;
   dataEntrega: Date | null;
+  pagamentoConfirmado: boolean;
 }
 
 /**
@@ -58,6 +62,7 @@ export class OrdemServico extends Entity {
   private dataInicioExecucao: Date | null;
   private dataFinalizacao: Date | null;
   private dataEntrega: Date | null;
+  private pagamentoConfirmado: boolean;
 
   private constructor(
     id: string,
@@ -87,6 +92,7 @@ export class OrdemServico extends Entity {
     os.itensServico = props.itensServico.map(criarItemServico);
     os.itensPeca = props.itensPeca.map(criarItemPeca);
     os.observacaoDiagnostico = null;
+    os.pagamentoConfirmado = false;
     os.recalcularValorTotal();
     return os;
   }
@@ -108,6 +114,7 @@ export class OrdemServico extends Entity {
     os.dataInicioExecucao = snapshot.dataInicioExecucao;
     os.dataFinalizacao = snapshot.dataFinalizacao;
     os.dataEntrega = snapshot.dataEntrega;
+    os.pagamentoConfirmado = snapshot.pagamentoConfirmado;
     return os;
   }
 
@@ -158,8 +165,24 @@ export class OrdemServico extends Entity {
     this.dataFinalizacao = new Date();
   }
 
+  /** Confirmação assíncrona do pagamento (evento `pagamento.aprovado` da Saga). */
+  confirmarPagamento(): void {
+    this.pagamentoConfirmado = true;
+  }
+
   entregar(): void {
-    this.transicionarPara(StatusOrdemServico.ENTREGUE);
+    if (!podeTransicionar(this.status, StatusOrdemServico.ENTREGUE)) {
+      throw new InvalidStatusTransitionException(
+        this.status,
+        StatusOrdemServico.ENTREGUE,
+      );
+    }
+    if (!this.pagamentoConfirmado) {
+      throw new DomainException(
+        'Não é possível entregar a OS antes da confirmação do pagamento',
+      );
+    }
+    this.status = StatusOrdemServico.ENTREGUE;
     this.dataEntrega = new Date();
   }
 
@@ -234,5 +257,9 @@ export class OrdemServico extends Entity {
 
   getDataEntrega(): Date | null {
     return this.dataEntrega;
+  }
+
+  getPagamentoConfirmado(): boolean {
+    return this.pagamentoConfirmado;
   }
 }

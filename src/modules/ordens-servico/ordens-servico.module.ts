@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { MessagingModule } from '../../messaging/messaging.module';
 import { AuthModule } from '../auth/auth.module';
 import { ClientesModule } from '../clientes/clientes.module';
 import { VeiculosModule } from '../veiculos/veiculos.module';
@@ -12,17 +13,23 @@ import {
   HttpProducaoServiceClient,
   PRODUCAO_SERVICE_CLIENT,
 } from './infrastructure/producao-service.client';
+import {
+  RabbitMqSagaEventsPublisher,
+  SAGA_EVENTS_PUBLISHER,
+} from './infrastructure/saga-events.publisher';
+import { OrdensServicoEventsController } from './interfaces/messaging/ordens-servico.events-controller';
 import { OrdensServicoController } from './interfaces/http/ordens-servico.controller';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([OrdemServicoOrmEntity]),
     ConfigModule,
+    MessagingModule,
     AuthModule,
     ClientesModule,
     VeiculosModule,
   ],
-  controllers: [OrdensServicoController],
+  controllers: [OrdensServicoController, OrdensServicoEventsController],
   providers: [
     OrdensServicoService,
     {
@@ -32,6 +39,10 @@ import { OrdensServicoController } from './interfaces/http/ordens-servico.contro
     {
       provide: PRODUCAO_SERVICE_CLIENT,
       useClass: HttpProducaoServiceClient,
+    },
+    {
+      provide: SAGA_EVENTS_PUBLISHER,
+      useClass: RabbitMqSagaEventsPublisher,
     },
   ],
 })

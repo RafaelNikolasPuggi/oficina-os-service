@@ -1,4 +1,7 @@
-import { InvalidStatusTransitionException } from '../../../shared/domain/exceptions';
+import {
+  DomainException,
+  InvalidStatusTransitionException,
+} from '../../../shared/domain/exceptions';
 import { OrdemServico } from './ordem-servico.entity';
 import { StatusOrdemServico } from './status-ordem-servico.enum';
 
@@ -58,9 +61,24 @@ describe('OrdemServico', () => {
     os.finalizar();
     expect(os.getStatus()).toBe(StatusOrdemServico.FINALIZADA);
 
+    os.confirmarPagamento();
     os.entregar();
     expect(os.getStatus()).toBe(StatusOrdemServico.ENTREGUE);
     expect(os.getDataEntrega()).not.toBeNull();
+  });
+
+  it('não permite entregar sem o pagamento confirmado (Saga)', () => {
+    const os = abrirOS();
+    os.iniciarDiagnostico();
+    os.registrarDiagnostico({
+      observacao: 'ok',
+      itensServicoAdicionais: [],
+      itensPecaAdicionais: [],
+    });
+    os.aprovarOrcamento();
+    os.finalizar();
+
+    expect(() => os.entregar()).toThrow(DomainException);
   });
 
   it('permite recusar o orçamento a partir de AGUARDANDO_APROVACAO', () => {
@@ -144,6 +162,7 @@ describe('OrdemServico', () => {
       dataInicioExecucao: new Date(),
       dataFinalizacao: new Date(),
       dataEntrega: new Date(),
+      pagamentoConfirmado: true,
     });
 
     expect(restaurado.getStatus()).toBe(StatusOrdemServico.ENTREGUE);

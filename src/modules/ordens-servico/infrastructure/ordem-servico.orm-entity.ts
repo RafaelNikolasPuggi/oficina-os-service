@@ -80,6 +80,13 @@ export class OrdemServicoOrmEntity {
   @Column({ type: 'timestamptz', name: 'data_entrega', nullable: true })
   dataEntrega: Date | null;
 
+  @Column({
+    type: 'boolean',
+    name: 'pagamento_confirmado',
+    default: false,
+  })
+  pagamentoConfirmado: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

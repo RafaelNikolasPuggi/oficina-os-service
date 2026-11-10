@@ -18,6 +18,7 @@ export class OrdemServicoMapper {
       dataInicioExecucao: orm.dataInicioExecucao,
       dataFinalizacao: orm.dataFinalizacao,
       dataEntrega: orm.dataEntrega,
+      pagamentoConfirmado: orm.pagamentoConfirmado,
     });
   }
 
@@ -37,6 +38,7 @@ export class OrdemServicoMapper {
     orm.dataInicioExecucao = domain.getDataInicioExecucao();
     orm.dataFinalizacao = domain.getDataFinalizacao();
     orm.dataEntrega = domain.getDataEntrega();
+    orm.pagamentoConfirmado = domain.getPagamentoConfirmado();
     return orm;
   }
 }

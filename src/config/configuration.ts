@@ -14,6 +14,10 @@ export interface AppConfig {
   producaoService: {
     url: string;
   };
+  rabbitmq: {
+    url: string;
+    queue: string;
+  };
   smtp: {
     host: string;
     port: number;
@@ -39,6 +43,10 @@ export default (): AppConfig => ({
   },
   producaoService: {
     url: process.env.PRODUCAO_SERVICE_URL ?? 'http://localhost:3001',
+  },
+  rabbitmq: {
+    url: process.env.RABBITMQ_URL ?? 'amqp://guest:guest@localhost:5672',
+    queue: 'os_queue',
   },
   smtp: {
     host: process.env.SMTP_HOST ?? 'localhost',

@@ -20,6 +20,8 @@ import type {
 import { StatusOrdemServico } from '../domain/status-ordem-servico.enum';
 import { PRODUCAO_SERVICE_CLIENT } from '../infrastructure/producao-service.client';
 import type { ProducaoServiceClient } from '../infrastructure/producao-service.client';
+import { SAGA_EVENTS_PUBLISHER } from '../infrastructure/saga-events.publisher';
+import type { SagaEventsPublisher } from '../infrastructure/saga-events.publisher';
 
 export interface ItemQuantidadeInput {
   id: string;
@@ -55,6 +57,8 @@ export class OrdensServicoService {
     private readonly veiculoRepository: VeiculoRepository,
     @Inject(PRODUCAO_SERVICE_CLIENT)
     private readonly producaoServiceClient: ProducaoServiceClient,
+    @Inject(SAGA_EVENTS_PUBLISHER)
+    private readonly sagaEventsPublisher: SagaEventsPublisher,
     private readonly emailService: EmailService,
   ) {}
 
@@ -121,34 +125,75 @@ export class OrdensServicoService {
   }
 
   /**
-   * Reserva o estoque das peças via chamada síncrona ao `producao-service`
-   * antes de confirmar a transição de status. TODO (Fase 4 — etapa de
-   * mensageria): isto vai se tornar o primeiro passo assíncrono da Saga —
-   * publicar `OrcamentoAprovado` no RabbitMQ e só transicionar para
-   * EM_EXECUCAO quando chegar o `PecasReservadas`; em caso de
-   * `ReservaDePecasFalhou`, a OS permanece em AGUARDANDO_APROVACAO
-   * (compensação).
+   * Primeiro passo assíncrono da Saga: publica `orcamento.aprovado` e
+   * retorna a OS como está (ainda AGUARDANDO_APROVACAO) — a transição para
+   * EM_EXECUCAO só acontece quando o producao-service confirmar a reserva
+   * de estoque (`confirmarReservaDePecas`, via RabbitMQ). Se a reserva
+   * falhar por falta de peça, `registrarFalhaReservaDePecas` mantém a OS
+   * neste mesmo status (compensação) e avisa o cliente.
    */
   async aprovarOrcamento(id: string, clienteId: string): Promise<OrdemServico> {
     const ordemServico = await this.obterValidandoCliente(id, clienteId);
 
-    const itensPeca = ordemServico.getItensPeca();
-    if (itensPeca.length > 0) {
-      await this.producaoServiceClient.reservarPecas(
-        itensPeca.map((item) => ({
-          pecaId: item.pecaId,
-          quantidade: item.quantidade,
-        })),
-      );
-    }
+    this.sagaEventsPublisher.publicarOrcamentoAprovado({
+      ordemServicoId: ordemServico.id,
+      itens: ordemServico.getItensPeca().map((item) => ({
+        pecaId: item.pecaId,
+        quantidade: item.quantidade,
+      })),
+    });
 
+    return ordemServico;
+  }
+
+  /** Consumido via RabbitMQ quando o producao-service confirma `pecas.reservadas`. */
+  async confirmarReservaDePecas(ordemServicoId: string): Promise<void> {
+    const ordemServico = await this.obter(ordemServicoId);
     ordemServico.aprovarOrcamento();
     const salva = await this.ordemServicoRepository.salvar(ordemServico);
     await this.notificarClienteSobreStatus(
       salva,
       'Orçamento aprovado! Seu veículo entrou em execução.',
     );
-    return salva;
+  }
+
+  /**
+   * Compensação: consumido via RabbitMQ quando o producao-service não
+   * conseguiu reservar alguma peça. A OS permanece em AGUARDANDO_APROVACAO
+   * — nenhuma transição de status acontece, só avisamos o cliente.
+   */
+  async registrarFalhaReservaDePecas(detalhe: {
+    ordemServicoId: string;
+    pecaNome: string;
+    disponivel: number;
+    solicitado: number;
+  }): Promise<void> {
+    const ordemServico = await this.obter(detalhe.ordemServicoId);
+    await this.notificarClienteSobreStatus(
+      ordemServico,
+      `Não foi possível aprovar o orçamento: estoque insuficiente da peça "${detalhe.pecaNome}" ` +
+        `(disponível ${detalhe.disponivel}, solicitado ${detalhe.solicitado}). Entraremos em contato.`,
+    );
+  }
+
+  /** Consumido via RabbitMQ quando o pagamento-service confirma `pagamento.aprovado`. */
+  async confirmarPagamento(ordemServicoId: string): Promise<void> {
+    const ordemServico = await this.obter(ordemServicoId);
+    ordemServico.confirmarPagamento();
+    await this.ordemServicoRepository.salvar(ordemServico);
+  }
+
+  /**
+   * Compensação: a OS permanece FINALIZADA (o serviço já foi executado,
+   * não há o que desfazer fisicamente) e bloqueada para entrega até uma
+   * nova tentativa de cobrança.
+   */
+  async rejeitarPagamento(ordemServicoId: string): Promise<void> {
+    const ordemServico = await this.obter(ordemServicoId);
+    await this.notificarClienteSobreStatus(
+      ordemServico,
+      'Não foi possível confirmar o pagamento da sua OS. Tente novamente para liberar a entrega do veículo.',
+    );
   }
 
   async recusarOrcamento(id: string, clienteId: string): Promise<OrdemServico> {
@@ -170,6 +215,13 @@ export class OrdensServicoService {
       salva,
       'Seu veículo está pronto! A execução dos serviços foi finalizada.',
     );
+
+    this.sagaEventsPublisher.publicarOsFinalizada({
+      ordemServicoId: salva.id,
+      clienteId: salva.getClienteId(),
+      valor: salva.getValorTotal(),
+    });
+
     return salva;
   }
 

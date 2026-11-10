@@ -1,14 +1,28 @@
 import './tracer';
 import { ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { AppConfig } from './config/configuration';
 import { JsonLoggerService } from './shared/logging/json-logger.service';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: new JsonLoggerService(),
+  });
+
+  const configService = app.get(ConfigService<AppConfig, true>);
+  const rabbitmq = configService.get('rabbitmq', { infer: true });
+  app.connectMicroservice<MicroserviceOptions>({
+    transport: Transport.RMQ,
+    options: {
+      urls: [rabbitmq.url],
+      queue: rabbitmq.queue,
+      queueOptions: { durable: true },
+    },
   });
 
   app.use(
@@ -48,6 +62,8 @@ async function bootstrap() {
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('docs', app, document);
+
+  await app.startAllMicroservices();
 
   const port = process.env.PORT ?? 3000;
   await app.listen(port);

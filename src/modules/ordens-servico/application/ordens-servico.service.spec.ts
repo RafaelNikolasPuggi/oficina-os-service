@@ -10,6 +10,7 @@ import { OrdemServico } from '../domain/ordem-servico.entity';
 import type { OrdemServicoRepository } from '../domain/ordem-servico.repository';
 import { StatusOrdemServico } from '../domain/status-ordem-servico.enum';
 import type { ProducaoServiceClient } from '../infrastructure/producao-service.client';
+import type { SagaEventsPublisher } from '../infrastructure/saga-events.publisher';
 import { OrdensServicoService } from './ordens-servico.service';
 
 describe('OrdensServicoService', () => {
@@ -47,6 +48,7 @@ describe('OrdensServicoService', () => {
   let clienteRepository: jest.Mocked<ClienteRepository>;
   let veiculoRepository: jest.Mocked<VeiculoRepository>;
   let producaoServiceClient: jest.Mocked<ProducaoServiceClient>;
+  let sagaEventsPublisher: jest.Mocked<SagaEventsPublisher>;
   let emailService: { enviarAtualizacaoDeStatus: jest.Mock };
   let service: OrdensServicoService;
 
@@ -75,7 +77,10 @@ describe('OrdensServicoService', () => {
     producaoServiceClient = {
       buscarServicosPorIds: jest.fn(async () => [servico]),
       buscarPecasPorIds: jest.fn(async () => [peca]),
-      reservarPecas: jest.fn(),
+    };
+    sagaEventsPublisher = {
+      publicarOrcamentoAprovado: jest.fn(),
+      publicarOsFinalizada: jest.fn(),
     };
 
     emailService = {
@@ -87,6 +92,7 @@ describe('OrdensServicoService', () => {
       clienteRepository,
       veiculoRepository,
       producaoServiceClient,
+      sagaEventsPublisher,
       emailService as never,
     );
   });
@@ -174,16 +180,21 @@ describe('OrdensServicoService', () => {
       return os;
     }
 
-    it('aprova o orçamento e reserva o estoque das peças da OS no producao-service', async () => {
+    it('publica orcamento.aprovado e mantém a OS em AGUARDANDO_APROVACAO (saga assíncrona)', async () => {
       const os = osAguardandoAprovacao();
       ordemServicoRepository.buscarPorId.mockResolvedValueOnce(os);
 
       const resultado = await service.aprovarOrcamento('os-1', cliente.id);
 
-      expect(resultado.getStatus()).toBe(StatusOrdemServico.EM_EXECUCAO);
-      expect(producaoServiceClient.reservarPecas).toHaveBeenCalledWith([
-        { pecaId: peca.id, quantidade: 2 },
-      ]);
+      expect(resultado.getStatus()).toBe(
+        StatusOrdemServico.AGUARDANDO_APROVACAO,
+      );
+      expect(
+        sagaEventsPublisher.publicarOrcamentoAprovado,
+      ).toHaveBeenCalledWith({
+        ordemServicoId: 'os-1',
+        itens: [{ pecaId: peca.id, quantidade: 2 }],
+      });
     });
 
     it('lança EntityNotFoundException quando o cliente autenticado não é o dono da OS', async () => {
@@ -193,7 +204,110 @@ describe('OrdensServicoService', () => {
       await expect(
         service.aprovarOrcamento('os-1', 'outro-cliente-id'),
       ).rejects.toThrow(EntityNotFoundException);
-      expect(producaoServiceClient.reservarPecas).not.toHaveBeenCalled();
+      expect(
+        sagaEventsPublisher.publicarOrcamentoAprovado,
+      ).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('confirmarReservaDePecas (consumidor pecas.reservadas)', () => {
+    it('transiciona a OS para EM_EXECUCAO', async () => {
+      const os = OrdemServico.abrir({
+        id: 'os-1',
+        clienteId: cliente.id,
+        veiculoId: veiculo.id,
+        itensServico: [],
+        itensPeca: [],
+      });
+      os.iniciarDiagnostico();
+      os.registrarDiagnostico({
+        observacao: 'ok',
+        itensServicoAdicionais: [],
+        itensPecaAdicionais: [],
+      });
+      ordemServicoRepository.buscarPorId.mockResolvedValueOnce(os);
+
+      await service.confirmarReservaDePecas('os-1');
+
+      expect(ordemServicoRepository.salvar).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'os-1' }),
+      );
+      expect(os.getStatus()).toBe(StatusOrdemServico.EM_EXECUCAO);
+    });
+  });
+
+  describe('registrarFalhaReservaDePecas (consumidor reserva.pecas.falhou — compensação)', () => {
+    it('mantém a OS em AGUARDANDO_APROVACAO e notifica o cliente', async () => {
+      const os = OrdemServico.abrir({
+        id: 'os-1',
+        clienteId: cliente.id,
+        veiculoId: veiculo.id,
+        itensServico: [],
+        itensPeca: [],
+      });
+      os.iniciarDiagnostico();
+      os.registrarDiagnostico({
+        observacao: 'ok',
+        itensServicoAdicionais: [],
+        itensPecaAdicionais: [],
+      });
+      ordemServicoRepository.buscarPorId.mockResolvedValueOnce(os);
+
+      await service.registrarFalhaReservaDePecas({
+        ordemServicoId: 'os-1',
+        pecaNome: 'Óleo 1L',
+        disponivel: 1,
+        solicitado: 2,
+      });
+
+      expect(os.getStatus()).toBe(StatusOrdemServico.AGUARDANDO_APROVACAO);
+      expect(emailService.enviarAtualizacaoDeStatus).toHaveBeenCalledWith(
+        cliente.getEmail(),
+        expect.any(String),
+        expect.stringContaining('Óleo 1L'),
+      );
+    });
+  });
+
+  describe('confirmarPagamento / rejeitarPagamento (consumidores da Saga de pagamento)', () => {
+    function osFinalizada(): OrdemServico {
+      const os = OrdemServico.abrir({
+        id: 'os-1',
+        clienteId: cliente.id,
+        veiculoId: veiculo.id,
+        itensServico: [],
+        itensPeca: [],
+      });
+      os.iniciarDiagnostico();
+      os.registrarDiagnostico({
+        observacao: 'ok',
+        itensServicoAdicionais: [],
+        itensPecaAdicionais: [],
+      });
+      os.aprovarOrcamento();
+      os.finalizar();
+      return os;
+    }
+
+    it('confirmarPagamento libera a entrega (entregar não lança mais)', async () => {
+      const os = osFinalizada();
+      ordemServicoRepository.buscarPorId.mockResolvedValueOnce(os);
+
+      await service.confirmarPagamento('os-1');
+
+      expect(os.getPagamentoConfirmado()).toBe(true);
+      expect(() => os.entregar()).not.toThrow();
+    });
+
+    it('rejeitarPagamento não altera o status e apenas notifica o cliente', async () => {
+      const os = osFinalizada();
+      ordemServicoRepository.buscarPorId.mockResolvedValueOnce(os);
+
+      await service.rejeitarPagamento('os-1');
+
+      expect(os.getStatus()).toBe(StatusOrdemServico.FINALIZADA);
+      expect(os.getPagamentoConfirmado()).toBe(false);
+      expect(emailService.enviarAtualizacaoDeStatus).toHaveBeenCalled();
     });
   });
 
@@ -297,10 +411,37 @@ describe('OrdensServicoService', () => {
 
       const finalizada = await service.finalizar('os-1');
       expect(finalizada.getStatus()).toBe(StatusOrdemServico.FINALIZADA);
+      expect(sagaEventsPublisher.publicarOsFinalizada).toHaveBeenCalledWith({
+        ordemServicoId: 'os-1',
+        clienteId: cliente.id,
+        valor: finalizada.getValorTotal(),
+      });
 
+      finalizada.confirmarPagamento();
       ordemServicoRepository.buscarPorId.mockResolvedValueOnce(finalizada);
       const entregue = await service.entregar('os-1');
       expect(entregue.getStatus()).toBe(StatusOrdemServico.ENTREGUE);
+    });
+
+    it('entregar lança DomainException se o pagamento ainda não foi confirmado', async () => {
+      const os = OrdemServico.abrir({
+        id: 'os-1',
+        clienteId: cliente.id,
+        veiculoId: veiculo.id,
+        itensServico: [],
+        itensPeca: [],
+      });
+      os.iniciarDiagnostico();
+      os.registrarDiagnostico({
+        observacao: 'ok',
+        itensServicoAdicionais: [],
+        itensPecaAdicionais: [],
+      });
+      os.aprovarOrcamento();
+      os.finalizar();
+      ordemServicoRepository.buscarPorId.mockResolvedValueOnce(os);
+
+      await expect(service.entregar('os-1')).rejects.toThrow(DomainException);
     });
 
     it('obter lança EntityNotFoundException quando a OS não existe', async () => {

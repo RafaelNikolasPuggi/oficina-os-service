@@ -25,6 +25,21 @@ services:
       - '1025:1025' # SMTP
       - '8025:8025' # Web UI (visualizar os e-mails enviados)
 
+  # Compartilhado pelos 3 microsserviços (Saga) — producao-service e
+  # pagamento-service apontam pra este mesmo broker em dev local.
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: oficina-rabbitmq
+    restart: unless-stopped
+    ports:
+      - '5672:5672' # AMQP
+      - '15672:15672' # Management UI (guest/guest)
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', 'check_port_connectivity']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   app:
     build:
       context: .
@@ -36,6 +51,8 @@ services:
         condition: service_healthy
       mailhog:
         condition: service_started
+      rabbitmq:
+        condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -47,6 +64,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1h}
       PRODUCAO_SERVICE_URL: ${PRODUCAO_SERVICE_URL:-http://producao-service:3001}
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
       SMTP_HOST: mailhog
       SMTP_PORT: 1025
       SMTP_SECURE: 'false'
