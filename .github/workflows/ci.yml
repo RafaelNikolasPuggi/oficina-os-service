@@ -10,6 +10,8 @@ jobs:
   build-test:
     name: Build, Test & Qualidade
     runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,10 +43,8 @@ jobs:
           retention-days: 7
 
       - name: SonarCloud Scan
-        if: ${{ secrets.SONAR_TOKEN != '' }}
+        if: ${{ env.SONAR_TOKEN != '' }}
         uses: SonarSource/sonarqube-scan-action@v4
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   docker-build-push:
     name: Build & Push da imagem Docker
