@@ -27,6 +27,9 @@ jobs:
       - run: npm run build
       - run: npm test -- --coverage
 
+      - name: Testes BDD (Saga completa — aprovação, execução e pagamento)
+        run: npm run test:bdd
+
       - name: Gate de cobertura (mínimo 80% de linhas)
         run: |
           node -e "
