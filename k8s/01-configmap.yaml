@@ -1,0 +1,22 @@
+# Variáveis NÃO sensíveis. Valores sensíveis (senhas, segredo do JWT) ficam
+# em 02-secret.yaml — nunca aqui.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oficina-os-app-config
+  namespace: oficina-os
+data:
+  NODE_ENV: 'production'
+  PORT: '3000'
+  DB_HOST: 'oficina-os-postgres' # Service do Postgres provisionado pelo Terraform (ver /infra)
+  DB_PORT: '5432'
+  DB_DATABASE: 'oficina_os'
+  JWT_EXPIRES_IN: '1h'
+  # Sem o producao-service local, chamadas de catálogo falham com 503 —
+  # aceitável neste cluster kind, que só valida o boot/health da aplicação.
+  PRODUCAO_SERVICE_URL: 'http://oficina-producao-app.oficina-producao.svc.cluster.local:3001'
+  RABBITMQ_URL: 'amqp://guest:guest@oficina-rabbitmq:5672'
+  SMTP_HOST: 'oficina-os-mailhog'
+  SMTP_PORT: '1025'
+  SMTP_SECURE: 'false'
+  SMTP_FROM: 'oficina@example.com'

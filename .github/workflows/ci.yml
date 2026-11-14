@@ -80,3 +80,217 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.image_tag }}
             ${{ steps.meta.outputs.image_name }}:latest
+
+  deploy:
+    name: Provisionar cluster local (kind) e validar o deploy
+    needs: docker-build-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - uses: helm/kind-action@v1
+        with:
+          install_only: true
+
+      - uses: azure/setup-kubectl@v4
+
+      - name: Gerar segredos efêmeros para este deploy de CI
+        run: |
+          echo "TF_VAR_postgres_password=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+          echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+
+      - name: Terraform init & apply (cluster + banco + RabbitMQ)
+        working-directory: infra
+        run: |
+          terraform init
+          terraform apply -auto-approve
+
+      - name: Configurar kubectl para o cluster provisionado
+        working-directory: infra
+        run: |
+          echo "KUBECONFIG=$(terraform output -raw kubeconfig_path)" >> "$GITHUB_ENV"
+
+      - name: Criar Secrets (aplicação + pull da imagem privada do ghcr.io)
+        run: |
+          kubectl create namespace oficina-os --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret generic oficina-os-app-secret -n oficina-os \
+            --from-literal=DB_USERNAME=oficina_os \
+            --from-literal=DB_PASSWORD="${TF_VAR_postgres_password}" \
+            --from-literal=JWT_SECRET="${JWT_SECRET}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret docker-registry ghcr-pull-secret -n oficina-os \
+            --docker-server=ghcr.io \
+            --docker-username="${{ github.actor }}" \
+            --docker-password="${{ secrets.GITHUB_TOKEN }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl patch serviceaccount default -n oficina-os \
+            -p '{"imagePullSecrets": [{"name": "ghcr-pull-secret"}]}'
+
+      - name: Aplicar manifestos Kubernetes da aplicação
+        run: |
+          sed "s#ghcr.io/OWNER/oficina-os-service:latest#${{ needs.docker-build-push.outputs.image_tag }}#" \
+            k8s/03-deployment.yaml > /tmp/03-deployment.yaml
+          kubectl apply -f k8s/00-namespace.yaml
+          kubectl apply -f k8s/01-configmap.yaml
+          kubectl apply -f /tmp/03-deployment.yaml
+          kubectl apply -f k8s/04-service.yaml
+          kubectl apply -f k8s/05-hpa.yaml
+          kubectl apply -f k8s/06-mailhog.yaml
+          kubectl -n oficina-os rollout status deployment/oficina-os-app --timeout=180s || {
+            echo "::group::Diagnóstico (rollout não completou a tempo)"
+            kubectl -n oficina-os get pods -o wide
+            kubectl -n oficina-os describe pods -l app=oficina-os-app
+            kubectl -n oficina-os logs -l app=oficina-os-app --all-containers --tail=100 || true
+            echo "::endgroup::"
+            exit 1
+          }
+
+      - name: Smoke test — health check e login administrativo
+        run: |
+          kubectl -n oficina-os port-forward svc/oficina-os-app 8080:80 &
+          sleep 5
+          curl --fail http://localhost:8080/health
+
+          kubectl -n oficina-os run seed-admin --rm -i --restart=Never \
+            --image=${{ needs.docker-build-push.outputs.image_tag }} \
+            --env="DB_HOST=oficina-os-postgres" --env="DB_PORT=5432" \
+            --env="DB_USERNAME=oficina_os" --env="DB_PASSWORD=${TF_VAR_postgres_password}" \
+            --env="DB_DATABASE=oficina_os" --env="ADMIN_EMAIL=ci@oficina.com" \
+            --env="ADMIN_PASSWORD=CiSmokeTest123" -n oficina-os \
+            -- node dist/seed/seed-admin.js
+
+          curl --fail -X POST http://localhost:8080/auth/login \
+            -H "Content-Type: application/json" \
+            -d '{"email":"ci@oficina.com","senha":"CiSmokeTest123"}'
+
+      - name: Destruir o cluster efêmero de CI
+        if: always()
+        working-directory: infra
+        run: terraform destroy -auto-approve
+
+  deploy-eks:
+    name: Deploy real no EKS (Fase 4)
+    needs: docker-build-push
+    # Só roda depois que oficina-infra-k8s e oficina-infra-db ja tiverem sido
+    # aplicados (publicam o que este job lê do SSM) e a variável de
+    # repositório AWS_DEPLOY_ENABLED=true estiver definida.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - uses: azure/setup-kubectl@v4
+      - uses: azure/setup-helm@v4
+
+      - name: Apontar kubectl para o cluster EKS (oficina-infra-k8s)
+        run: |
+          EKS_CLUSTER_NAME=$(aws ssm get-parameter --name /oficina/eks_cluster_name --query Parameter.Value --output text)
+          aws eks update-kubeconfig --region "${{ vars.AWS_REGION || 'us-east-1' }}" --name "$EKS_CLUSTER_NAME"
+
+      - name: Ler configuração publicada pelos outros repositórios (SSM)
+        run: |
+          DB_ENDPOINT=$(aws ssm get-parameter --name /oficina/db_endpoint --query Parameter.Value --output text)
+          DB_USERNAME=$(aws ssm get-parameter --name /oficina/os_db_username --with-decryption --query Parameter.Value --output text)
+          DB_PASSWORD=$(aws ssm get-parameter --name /oficina/os_db_password --with-decryption --query Parameter.Value --output text)
+          JWT_SECRET=$(aws ssm get-parameter --name /oficina/jwt_secret --with-decryption --query Parameter.Value --output text)
+
+          echo "::add-mask::$DB_USERNAME"
+          echo "::add-mask::$DB_PASSWORD"
+          echo "::add-mask::$JWT_SECRET"
+
+          echo "DB_ENDPOINT=$DB_ENDPOINT" >> "$GITHUB_ENV"
+          echo "DB_USERNAME=$DB_USERNAME" >> "$GITHUB_ENV"
+          echo "DB_PASSWORD=$DB_PASSWORD" >> "$GITHUB_ENV"
+          echo "JWT_SECRET=$JWT_SECRET" >> "$GITHUB_ENV"
+
+      - name: Criar namespaces e Secrets (aplicação + pull da imagem + New Relic)
+        run: |
+          kubectl apply -f k8s-aws/00-namespace.yaml
+          kubectl create secret generic oficina-os-app-secret -n oficina-os \
+            --from-literal=DB_USERNAME="${DB_USERNAME}" \
+            --from-literal=DB_PASSWORD="${DB_PASSWORD}" \
+            --from-literal=JWT_SECRET="${JWT_SECRET}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret docker-registry ghcr-pull-secret -n oficina-os \
+            --docker-server=ghcr.io \
+            --docker-username="${{ github.actor }}" \
+            --docker-password="${{ secrets.GITHUB_TOKEN }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl patch serviceaccount default -n oficina-os \
+            -p '{"imagePullSecrets": [{"name": "ghcr-pull-secret"}]}'
+          if [ -n "${{ secrets.NEW_RELIC_LICENSE_KEY }}" ]; then
+            kubectl create secret generic newrelic-secret -n oficina-os \
+              --from-literal=license-key="${{ secrets.NEW_RELIC_LICENSE_KEY }}" \
+              --dry-run=client -o yaml | kubectl apply -f -
+          fi
+
+      - name: Aplicar RabbitMQ compartilhado (idempotente entre os 3 serviços)
+        run: kubectl apply -f k8s-aws/07-rabbitmq.yaml
+
+      - name: Aplicar manifestos Kubernetes da aplicação (k8s-aws/)
+        run: |
+          sed -e "s#ghcr.io/OWNER/oficina-os-service:latest#${{ needs.docker-build-push.outputs.image_tag }}#" \
+              k8s-aws/03-deployment.yaml > /tmp/03-deployment.yaml
+          sed -e "s#__DB_ENDPOINT__#${DB_ENDPOINT}#" \
+              k8s-aws/01-configmap.yaml > /tmp/01-configmap.yaml
+          kubectl apply -f /tmp/01-configmap.yaml
+          kubectl apply -f /tmp/03-deployment.yaml
+          kubectl apply -f k8s-aws/04-service.yaml
+          kubectl apply -f k8s-aws/05-hpa.yaml
+          kubectl apply -f k8s-aws/06-mailhog.yaml
+          kubectl -n oficina-os rollout status deployment/oficina-os-app --timeout=300s || {
+            echo "::group::Diagnóstico (rollout não completou a tempo)"
+            kubectl -n oficina-os get pods -o wide
+            kubectl -n oficina-os describe pods -l app=oficina-os-app
+            kubectl -n oficina-os logs -l app=oficina-os-app --all-containers --tail=100 || true
+            echo "::endgroup::"
+            exit 1
+          }
+
+      - name: Reiniciar os pods se o secret do New Relic mudou (novo ou rotacionado)
+        env:
+          NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+        run: |
+          if [ -n "$NEW_RELIC_LICENSE_KEY" ]; then
+            kubectl -n oficina-os rollout restart deployment/oficina-os-app
+            kubectl -n oficina-os rollout status deployment/oficina-os-app --timeout=180s
+          fi
+
+      - name: Instalar integração do New Relic com o Kubernetes (métricas de CPU/memória/healthchecks + logs)
+        env:
+          NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+        run: |
+          if [ -n "$NEW_RELIC_LICENSE_KEY" ]; then
+            helm repo add newrelic https://helm-charts.newrelic.com
+            helm repo update
+            kubectl delete mutatingwebhookconfiguration newrelic-bundle-nri-metadata-injection --ignore-not-found
+            helm upgrade --install newrelic-bundle newrelic/nri-bundle \
+              --namespace newrelic --create-namespace \
+              --set global.licenseKey="${NEW_RELIC_LICENSE_KEY}" \
+              --set global.cluster=oficina-eks \
+              --set newrelic-infrastructure.privileged=true \
+              --set kube-state-metrics.enabled=true \
+              --set newrelic-logging.enabled=true \
+              --set newrelic-logging.fluentBit.filter.excludeSystem=true \
+              --wait --timeout 8m \
+              || echo "::warning::Integração do New Relic com o Kubernetes falhou ou expirou o tempo limite -- a aplicação em si já foi implantada com sucesso no step anterior."
+          else
+            echo "NEW_RELIC_LICENSE_KEY não configurado — pulando integração de Kubernetes."
+          fi
+
+      - name: URL pública do app (NLB)
+        run: |
+          echo "Aguardando o Load Balancer ficar pronto..."
+          sleep 30
+          kubectl -n oficina-os get svc oficina-os-app -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'

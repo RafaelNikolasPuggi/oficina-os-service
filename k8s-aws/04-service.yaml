@@ -1,0 +1,21 @@
+# type: LoadBalancer provisiona uma NLB pública — este é o único serviço dos
+# 3 microsserviços que precisa de exposição pública além do pagamento-service
+# (que expõe o webhook do Mercado Pago). O producao-service nunca é chamado
+# de fora do cluster, fica ClusterIP-only.
+apiVersion: v1
+kind: Service
+metadata:
+  name: oficina-os-app
+  namespace: oficina-os
+  labels:
+    app: oficina-os-app
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: 'nlb'
+spec:
+  type: LoadBalancer
+  selector:
+    app: oficina-os-app
+  ports:
+    - port: 80
+      targetPort: 3000
+      protocol: TCP
