@@ -1,0 +1,57 @@
+# RabbitMQ compartilhado pelos 3 microsserviços (Saga) — namespace
+# oficina-shared, fora de qualquer namespace de app. Aplicado de forma
+# idempotente pelos 3 repositórios (ver ci.yml de cada um): não importa
+# qual serviço faça o deploy primeiro, `kubectl apply` neste manifesto é um
+# no-op se o recurso já existir com o mesmo conteúdo.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oficina-rabbitmq
+  namespace: oficina-shared
+  labels:
+    app: oficina-rabbitmq
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oficina-rabbitmq
+  template:
+    metadata:
+      labels:
+        app: oficina-rabbitmq
+    spec:
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:3-management-alpine
+          ports:
+            - containerPort: 5672
+            - containerPort: 15672
+          readinessProbe:
+            exec:
+              command: ['rabbitmq-diagnostics', 'check_port_connectivity']
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: '100m'
+              memory: '256Mi'
+            limits:
+              cpu: '500m'
+              memory: '512Mi'
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oficina-rabbitmq
+  namespace: oficina-shared
+spec:
+  type: ClusterIP
+  selector:
+    app: oficina-rabbitmq
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: 5672
+    - name: management
+      port: 15672
+      targetPort: 15672

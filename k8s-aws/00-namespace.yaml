@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: oficina-os
+  labels:
+    app.kubernetes.io/part-of: oficina-os-service
+---
+# Namespace pra infraestrutura compartilhada entre os 3 microsserviços
+# (RabbitMQ da Saga, MongoDB do pagamento-service) — aplicado de forma
+# idempotente pelos 3 repositórios, não importa qual rode o deploy primeiro.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: oficina-shared
+  labels:
+    app.kubernetes.io/part-of: oficina-fase4-microservices

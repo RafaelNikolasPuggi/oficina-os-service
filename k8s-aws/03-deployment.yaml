@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oficina-os-app
+  namespace: oficina-os
+  labels:
+    app: oficina-os-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: oficina-os-app
+  template:
+    metadata:
+      labels:
+        app: oficina-os-app
+    spec:
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      containers:
+        - name: oficina-os-app
+          # Substituído em tempo de deploy pela pipeline de CI/CD com a tag
+          # da imagem recém publicada em ghcr.io.
+          image: ghcr.io/OWNER/oficina-os-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: oficina-os-app-config
+            - secretRef:
+                name: oficina-os-app-secret
+          env:
+            # newrelic-secret só existe quando NEW_RELIC_LICENSE_KEY está
+            # configurado no repositório — ver ci.yml.
+            - name: NEW_RELIC_LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: newrelic-secret
+                  key: license-key
+                  optional: true
+          resources:
+            requests:
+              cpu: '100m'
+              memory: '128Mi'
+            limits:
+              cpu: '500m'
+              memory: '256Mi'
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 15

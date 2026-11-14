@@ -1,0 +1,28 @@
+# Variáveis NÃO sensíveis. DB_HOST é substituído em tempo de deploy pela
+# pipeline de CI/CD com o endpoint publicado pelo oficina-infra-db no SSM
+# Parameter Store (/oficina/db_endpoint) — mesma instância RDS compartilhada
+# com o producao-service, bancos lógicos distintos (ver ci.yml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oficina-os-app-config
+  namespace: oficina-os
+data:
+  NODE_ENV: 'production'
+  PORT: '3000'
+  DB_HOST: '__DB_ENDPOINT__'
+  DB_PORT: '5432'
+  DB_DATABASE: 'oficina_os'
+  DB_SSL: 'true'
+  JWT_EXPIRES_IN: '1h'
+  PRODUCAO_SERVICE_URL: 'http://oficina-producao-app.oficina-producao.svc.cluster.local'
+  RABBITMQ_URL: 'amqp://guest:guest@oficina-rabbitmq.oficina-shared.svc.cluster.local:5672'
+  SMTP_HOST: 'oficina-os-mailhog'
+  SMTP_PORT: '1025'
+  SMTP_SECURE: 'false'
+  SMTP_FROM: 'oficina@example.com'
+  NEW_RELIC_ENABLED: 'true'
+  NEW_RELIC_NO_CONFIG_FILE: 'true'
+  NEW_RELIC_APP_NAME: 'oficina-os-service'
+  NEW_RELIC_LOG: 'stdout'
+  NEW_RELIC_DISTRIBUTED_TRACING_ENABLED: 'true'

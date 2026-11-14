@@ -1,0 +1,42 @@
+# Mailhog: captura os e-mails de notificação de status da OS para
+# demonstração/desenvolvimento, sem precisar de uma conta SMTP real.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oficina-os-mailhog
+  namespace: oficina-os
+  labels:
+    app: oficina-os-mailhog
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oficina-os-mailhog
+  template:
+    metadata:
+      labels:
+        app: oficina-os-mailhog
+    spec:
+      containers:
+        - name: mailhog
+          image: mailhog/mailhog:v1.0.1
+          ports:
+            - containerPort: 1025
+            - containerPort: 8025
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oficina-os-mailhog
+  namespace: oficina-os
+spec:
+  type: ClusterIP
+  selector:
+    app: oficina-os-mailhog
+  ports:
+    - name: smtp
+      port: 1025
+      targetPort: 1025
+    - name: web-ui
+      port: 8025
+      targetPort: 8025
