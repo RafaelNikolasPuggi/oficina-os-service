@@ -267,6 +267,13 @@ jobs:
             exit 1
           }
 
+      - name: Garantir usuário administrativo inicial
+        env:
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+        run: |
+          POD=$(kubectl -n oficina-os get pods -l app=oficina-os-app -o jsonpath='{.items[0].metadata.name}')
+          kubectl -n oficina-os exec "$POD" -- env ADMIN_EMAIL=admin@oficina.com "ADMIN_PASSWORD=${ADMIN_PASSWORD}" node dist/seed/seed-admin.js
+
       - name: Reiniciar os pods se o secret do New Relic mudou (novo ou rotacionado)
         env:
           NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
