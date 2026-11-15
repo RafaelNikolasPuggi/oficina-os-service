@@ -190,6 +190,7 @@ resource "kubernetes_deployment" "rabbitmq" {
             }
             initial_delay_seconds = 10
             period_seconds        = 5
+            timeout_seconds       = 10 # rabbitmq-diagnostics inicia uma VM Erlang; o default de 1s nunca é suficiente
           }
         }
       }
