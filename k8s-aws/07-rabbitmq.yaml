@@ -31,6 +31,7 @@ spec:
               command: ['rabbitmq-diagnostics', 'check_port_connectivity']
             initialDelaySeconds: 10
             periodSeconds: 5
+            timeoutSeconds: 10 # rabbitmq-diagnostics inicia uma VM Erlang; o default de 1s nunca é suficiente
           resources:
             requests:
               cpu: '100m'
