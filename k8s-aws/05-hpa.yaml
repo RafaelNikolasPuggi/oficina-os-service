@@ -1,5 +1,8 @@
-# Escalabilidade dinâmica: entre 2 e 10 réplicas conforme consumo de
+# Escalabilidade dinâmica: entre 1 e 10 réplicas conforme consumo de
 # CPU/memória — atende picos de abertura de OS sem intervenção manual.
+# minReplicas=1 (não 2): os 2 nós t3.small do cluster compartilhado têm
+# limite baixo de pods por nó, e já dividem espaço com RabbitMQ, Mongo e os
+# DaemonSets do New Relic — 2 réplicas fixas por serviço não cabiam.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -10,7 +13,7 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: oficina-os-app
-  minReplicas: 2
+  minReplicas: 1
   maxReplicas: 10
   metrics:
     - type: Resource
