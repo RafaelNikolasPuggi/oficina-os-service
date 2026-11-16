@@ -1,5 +1,8 @@
 # oficina-os-service
 
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=RafaelNikolasPuggi_oficina-os-service&metric=coverage)](https://sonarcloud.io/summary/new_code?id=RafaelNikolasPuggi_oficina-os-service)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=RafaelNikolasPuggi_oficina-os-service&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=RafaelNikolasPuggi_oficina-os-service)
+
 Microsserviço de **Ordens de Serviço** do sistema de gestão da oficina — Tech Challenge Fase 4 (POS TECH / SOAT).
 
 Parte de uma arquitetura de 3 microsserviços, cada um com seu próprio repositório e banco de dados:
