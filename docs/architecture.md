@@ -60,6 +60,7 @@ flowchart TB
     Cliente((Cliente))
     Admin((Administrador))
     MP[["Mercado Pago"]]
+    LAMBDA["Lambda Auth<br/>oficina-lambda-auth"]
 
     subgraph AWS["AWS — 1 cluster EKS + 1 RDS compartilhados"]
         subgraph EKS["EKS"]
@@ -80,8 +81,11 @@ flowchart TB
         RDS[("RDS PostgreSQL<br/>oficina_os · oficina_producao")]
     end
 
-    Cliente -->|"Bearer JWT"| OS
+    Cliente -->|"POST /auth/cliente"| LAMBDA
+    LAMBDA -.->|"JWT cliente"| Cliente
+    Cliente -->|"Bearer JWT cliente"| OS
     Admin -->|"Bearer JWT admin"| OS
+    LAMBDA --> RDS
     OS --> RDS
     PROD --> RDS
 
