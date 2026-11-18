@@ -150,7 +150,7 @@ sequenceDiagram
     else pagamento rejeitado (compensação)
         PAG->>MQ: emit pagamento.rejeitado
         MQ->>OS: pagamento.rejeitado
-        Note over OS: permanece FINALIZADA — serviço já executado,<br/>nada pra desfazer fisicamente; bloqueado pra entrega
+        Note over OS: permanece FINALIZADA — serviço já executado,<br/>nada pra desfazer fisicamente, bloqueado pra entrega
         OS->>Cliente: e-mail — tentar pagamento de novo
     end
 ```
